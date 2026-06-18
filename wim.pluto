@@ -1,0 +1,117 @@
+-- RESHDR_DISK_SHORT
+export function parse_resource_header(bin)
+	local size, flags, offset, original_size = "<I7I1I8I8":unpack(bin)
+	return $object(size, flags, offset, original_size)
+end
+
+export function read_wim_header(fh)
+	local ImageTag, cbSize, dwVersion, dwFlags, dwCompressionSize, gWIMGuid, usPartNumber, usTotalParts, dwImageCount, rhOffsetTable, rhXmlData, rhBootMetadata, dwBootIndex, rhIntegrity--, bUnused
+		= "<c8      I4      I4         I4       I4                 c16       I2            I2            I4            c24            c24        c24             I4           c24"       --  c60
+			:unpack(fh:read(208 - 60))
+	assert(ImageTag == "MSWIM\0\0\0")
+	assert(dwVersion == 0x10D00)
+	rhOffsetTable = parse_resource_header(rhOffsetTable)
+	rhXmlData = parse_resource_header(rhXmlData)
+	rhBootMetadata = parse_resource_header(rhBootMetadata)
+	rhIntegrity = parse_resource_header(rhIntegrity)
+	return $object(ImageTag, cbSize, dwVersion, dwFlags, dwCompressionSize, gWIMGuid, usPartNumber, usTotalParts, dwImageCount, rhOffsetTable, rhXmlData, rhBootMetadata, dwBootIndex, rhIntegrity, bUnused)
+end
+
+-- The offset table (or resource lookup table) is an array of RESHDR_DISK
+export function read_offset_table(fh, header)
+	local num_resources = header.rhOffsetTable.size // 50
+	fh:seek("set", header.rhOffsetTable.offset)
+	local resources = {}
+	for i = 1, num_resources do
+		local resource = parse_resource_header(fh:read(24))
+		resource.part_number, resource.ref_count = "<I2I4":unpack(fh:read(6))
+		resource.sha1 = fh:read(20)
+		resources:insert(resource)
+	end
+	return resources
+end
+
+export function utf16_to_utf8(str)
+	local i = 1
+	local out = ""
+	while i < #str do
+		codepoint, i = "<I2":unpack(str, i)
+		assert(codepoint < 0b10000000)
+		out ..= string.char(codepoint)
+	end
+	return out
+end
+
+export function read_directory_entry(fh)
+	local len = "<I8":unpack(fh:read(8))
+	if len == 0 then
+		return nil
+	end
+	local data = fh:read(len - 8)
+	local attributes, securityId, subdirOffset, _unused1, _unused2, ctime, atime, mtime, sha1, _unk, streams, short_name_len, file_name_len
+		= "<I4        i4          I8            I8        I8        I8     I8     I8     c20   c12   I2       I2              I2"
+			:unpack(data)
+	assert(short_name_len == 0)
+	local obj = $object(attributes, securityId, subdirOffset, ctime, atime, mtime, sha1, streams, short_name_len, file_name_len)
+	local file_name_utf16 = data:sub(95, 94 + file_name_len)
+	obj.file_name = utf16_to_utf8(file_name_utf16)
+	return obj
+end
+
+export class Wim
+	function __construct(public fh)
+		self.header = read_wim_header(fh)
+		local resources = read_offset_table(fh, self.header)
+		self.sha1_to_resource = {}
+		for resources as resource do
+			self.sha1_to_resource[resource.sha1] = resource
+			if resource.flags == 2 then
+				assert(not self.metadata_resource)
+				self.metadata_resource = resource
+			end
+		end
+	end
+
+	function getRootDirectoryEntry()
+		self.fh:seek("set", self.metadata_resource.offset)
+		self.fh:seek("cur", "<I4":unpack(self.fh:read(4)) - 4) -- skip security block
+		return read_directory_entry(self.fh)
+	end
+
+	function listDirectory(dir_entry)
+		--assert(dir_entry.subdirOffset ~= 0)
+		self.fh:seek("set", self.metadata_resource.offset + dir_entry.subdirOffset)
+		local entries = {}
+		while entry := read_directory_entry(self.fh) do
+			entries:insert(entry)
+		end
+		return entries
+	end
+
+	function getFileContents(entry)
+		--assert(entry.subdirOffset == 0)
+
+		-- Special case for empty files
+		if entry.sha1 == "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0" then
+			return ""
+		end
+
+		local resource = self.sha1_to_resource[entry.sha1]
+		assert(resource.size == resource.original_size)
+		self.fh:seek("set", resource.offset)
+		return self.fh:read(resource.size)
+	end
+
+	function extract(dir_entry, baseOutDir)
+		io.mkdir(baseOutDir)
+		local entries = self:listDirectory(dir_entry)
+		for entries as entry do
+			local path = baseOutDir .. "/" .. entry.file_name
+			if entry.subdirOffset == 0 do
+				io.contents(path, self:getFileContents(entry))
+			else
+				self:extract(entry, path)
+			end
+		end
+	end
+end

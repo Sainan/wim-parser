@@ -1,0 +1,9 @@
+if arg[1] then
+	local { Wim } = require("wim")
+
+	local wim = new Wim(io.open(arg[1], "rb"))
+	local root = wim:getRootDirectoryEntry()
+	wim:extract(root, "extracted")
+else
+	print("Usage: pluto extract.pluto <path to .wim file>")
+end

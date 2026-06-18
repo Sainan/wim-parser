@@ -1,0 +1,9 @@
+{
+	"name": "wim-parser",
+	"version": "0.1.0",
+	"main": "wim.js",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Sainan/wim-parser.git"
+	}
+}
