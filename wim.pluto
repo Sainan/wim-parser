@@ -32,6 +32,9 @@ export function read_offset_table(fh, header)
 end
 
 export function utf16_to_utf8(str)
+	if utf8.from16 then
+		return utf8.from16(str) -- Pluto 0.14.0 and above
+	end
 	local i = 1
 	local out = ""
 	while i < #str do
