@@ -87,18 +87,6 @@ async function readOffsetTable(fh, header) {
   return resources;
 }
 
-function utf16ToUtf8(buf) {
-  let out = "";
-
-  for (let i = 0; i < buf.length; i += 2) {
-    const codepoint = buf.readUInt16LE(i);
-    assert(codepoint < 0x80, "non-ASCII UTF-16 filename not supported");
-    out += String.fromCharCode(codepoint);
-  }
-
-  return out;
-}
-
 async function readDirectoryEntry(fh) {
   const len = Number((await fh.read(8)).readBigUInt64LE(0));
 
@@ -122,7 +110,7 @@ async function readDirectoryEntry(fh) {
   assert(entry.short_name_len === 0);
 
   const fileNameUtf16 = data.subarray(94, 94 + entry.file_name_len);
-  entry.file_name = utf16ToUtf8(fileNameUtf16);
+  entry.file_name = fileNameUtf16.toString("utf16le");
 
   return entry;
 }
